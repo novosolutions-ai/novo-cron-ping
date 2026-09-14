@@ -1,20 +1,32 @@
-# re-registered 2026-09-14 21:45Z after schedule failed to fire
+# Clock for the GC payment notifier.
+# GitHub */5 schedules silently skip (observed 2026-09-14: one tick in 3h),
+# so we schedule HOURLY (reliable) and loop inside the job: one ping every
+# 5 minutes for ~55 min. Concurrency keeps exactly one loop alive.
 name: ping
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "11 * * * *"
   workflow_dispatch:
 permissions:
   actions: write
+concurrency:
+  group: ping-loop
+  cancel-in-progress: true
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 58
     steps:
-      - name: Ping endpoint
-        env:
-          PING_URL: ${{ secrets.PING_URL }}
-        run: curl -fsS --max-time 120 "$PING_URL" > /dev/null
       - name: Keep schedule alive
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/ping.yml/enable"
+      - name: Ping loop (every 5 min for 55 min)
+        env:
+          PING_URL: ${{ secrets.PING_URL }}
+        run: |
+          end=$((SECONDS + 3300))
+          while [ "$SECONDS" -lt "$end" ]; do
+            curl -fsS --max-time 120 "$PING_URL" > /dev/null || echo "tick failed at $(date -u), continuing"
+            sleep 300
+          done
