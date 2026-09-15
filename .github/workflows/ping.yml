@@ -1,7 +1,10 @@
 # Clock for the GC payment notifier.
-# GitHub */5 schedules silently skip (observed 2026-09-14: one tick in 3h),
-# so we schedule HOURLY (reliable) and loop inside the job: one ping every
-# 5 minutes for ~55 min. Concurrency keeps exactly one loop alive.
+# GitHub cron proved unreliable on this repo (2026-09-14: */5 skipped for
+# hours, then hourly ticks 23:11 and 00:11 both silently missed). So the
+# chain is SELF-PERPETUATING: each run pings every 5 min for ~50 min, then
+# dispatches the next run (workflow_dispatch is exempt from GITHUB_TOKEN
+# recursion blocking). The hourly cron stays as a free backstop; the
+# concurrency group guarantees at most one loop, so no duplicate pings.
 name: ping
 on:
   schedule:
@@ -20,13 +23,17 @@ jobs:
       - name: Keep schedule alive
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/ping.yml/enable"
-      - name: Ping loop (every 5 min for 55 min)
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/ping.yml/enable" || true
+      - name: Ping loop (every 5 min for 50 min)
         env:
           PING_URL: ${{ secrets.PING_URL }}
         run: |
-          end=$((SECONDS + 3300))
+          end=$((SECONDS + 3000))
           while [ "$SECONDS" -lt "$end" ]; do
             curl -fsS --max-time 120 "$PING_URL" > /dev/null || echo "tick failed at $(date -u), continuing"
             sleep 300
           done
+      - name: Dispatch next loop (self-perpetuating chain)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ping.yml --ref main --repo "${{ github.repository }}"
