@@ -1,0 +1,26 @@
+# Chain healer that needs no laptop: if the ping loop has no queued/in_progress run, dispatch one.
+# Never pings an endpoint itself, so it cannot race the loop. Several cron slots per hour because
+# GitHub drops scheduled ticks on this repo; any one of them landing is enough.
+name: heal
+on:
+  schedule:
+    - cron: "4,19,34,49 * * * *"
+  workflow_dispatch:
+permissions:
+  actions: write
+concurrency:
+  group: heal
+  cancel-in-progress: false
+jobs:
+  heal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Redispatch ping loop if dead
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/heal.yml/enable" || true
+          alive=$(gh run list --repo "${{ github.repository }}" --workflow ping.yml --limit 10 --json status --jq '[.[] | select(.status=="in_progress" or .status=="queued")] | length')
+          echo "alive loops: $alive"
+          if [ "$alive" -eq 0 ]; then gh workflow run ping.yml --ref main --repo "${{ github.repository }}"; fi

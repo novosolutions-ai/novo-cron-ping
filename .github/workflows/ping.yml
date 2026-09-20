@@ -1,4 +1,8 @@
-# Clock for the GC payment notifier.
+# Clock for every Novo poller that must run 24/7 without a laptop:
+#   PING_URL     = GC payment notifier (Discord #closed)
+#   PING_URL_BEN = Benjamin SMC Inner Circle appointments backstop (Slack #appointments)
+#   PING_URL_HS  = Her Standard booking sync
+# One loop = one clock per endpoint, so no duplicate-post races. heal.yml revives a dead chain.
 # GitHub cron proved unreliable on this repo (2026-09-14: */5 skipped for
 # hours, then hourly ticks 23:11 and 00:11 both silently missed). So the
 # chain is SELF-PERPETUATING: each run pings every 5 min for ~50 min, then
@@ -27,13 +31,20 @@ jobs:
       - name: Ping loop (every 5 min for 50 min)
         env:
           PING_URL: ${{ secrets.PING_URL }}
+          PING_URL_BEN: ${{ secrets.PING_URL_BEN }}
+          PING_URL_HS: ${{ secrets.PING_URL_HS }}
         run: |
           end=$((SECONDS + 3000))
           while [ "$SECONDS" -lt "$end" ]; do
-            curl -fsS --max-time 120 "$PING_URL" > /dev/null || echo "tick failed at $(date -u), continuing"
+            for name in PING_URL PING_URL_BEN PING_URL_HS; do
+              url="${!name}"
+              [ -n "$url" ] || continue
+              curl -fsS --max-time 120 "$url" > /dev/null 2>&1 || echo "$name tick failed at $(date -u), continuing"
+            done
             sleep 300
           done
       - name: Dispatch next loop (self-perpetuating chain)
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run ping.yml --ref main --repo "${{ github.repository }}"
